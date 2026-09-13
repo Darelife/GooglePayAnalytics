@@ -1,0 +1,7 @@
+[categories]
+Food = ["swiggy", "zomato", "restaurant", "cafe"]
+Transport = ["uber", "ola", "metro"]
+Shopping = ["amazon", "flipkart"]
+
+[parser]
+credit_keywords = ["refund", "cashback", "received", "reversal"]
