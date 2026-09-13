@@ -1,0 +1,13 @@
+[categories]
+Food = ["swiggy", "zomato", "restaurant", "cafe", "dominos", "foods", "polar bear", "dlv", "red chilly", "pancakes", "bewitched", "foodking", "mega mart", "vending brothers", "blinkit"]
+Groceries = ["bigbasket", "zepto", "grocery", "amul"]
+Transport = ["uber", "ola", "metro", "rapido", "fuel", "petrol"]
+Shopping = ["amazon", "flipkart", "myntra"]
+Bills = ["electricity", "recharge", "airtel", "jio", "water"]
+Entertainment = ["netflix", "spotify", "movie", "bookmyshow"]
+Health = ["pharmacy", "hospital", "doctor", "apollo"]
+Housing = ["stanzaliving"]
+Travel = ["ixigo", "travenues", "dudhsagar tours"]
+
+[parser]
+credit_keywords = ["refund", "cashback", "received", "reversal"]
