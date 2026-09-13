@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import re
 import subprocess
@@ -22,7 +23,7 @@ except ModuleNotFoundError:  # pragma: no cover - fallback for minimal system Py
     PdfReader = None
 
 
-DATE_LINE = re.compile(r"^(\d{1,2})\s+([A-Za-z]{3,9}),?$")
+DATE_LINE = re.compile(r"^(\d{1,2})\s*([A-Za-z]{3,9}),?$")
 YEAR_LINE = re.compile(r"^\d{4}$")
 AMOUNT_LINE = re.compile(r"^₹\s*([\d,]+(?:\.\d*)?)\s*$")
 DATE_FORMATS = ("%d %b %Y", "%d %B %Y")
@@ -73,8 +74,9 @@ def parse_transactions(text: str, categories: dict[str, list[str]], credit_keywo
             current_date = datetime.strptime(f"{date_match.group(1)} {date_match.group(2)} {lines[index + 1]}", "%d %b %Y").date().isoformat()
             index += 2
             continue
-        if current_date and (lines[index].startswith("Paid to ") or lines[index].startswith("Received from ")):
-            description = re.sub(r"^(?:Paid to|Received from)\s+", "", lines[index]).strip()
+        transaction_match = re.match(r"^(Paid\s*to|Received\s*from)\s*(.+)$", lines[index]) if current_date else None
+        if transaction_match:
+            description = transaction_match.group(2).strip()
             amount = None
             lookahead = index + 1
             while lookahead < len(lines) and lookahead < index + 8:
@@ -82,13 +84,13 @@ def parse_transactions(text: str, categories: dict[str, list[str]], credit_keywo
                 if amount_match:
                     number = amount_match.group(1)
                     # PDF layout can split the final digit of an amount onto its own line.
-                    if lookahead + 1 < len(lines) and re.fullmatch(r"\d", lines[lookahead + 1]):
+                    if lookahead + 1 < len(lines) and re.fullmatch(r"\d+", lines[lookahead + 1]):
                         number += lines[lookahead + 1]
                     amount = float(number.replace(",", ""))
                     break
                 lookahead += 1
             if amount is not None:
-                signed_amount = -amount if any(word in description.casefold() for word in credit_keywords) or lines[index].startswith("Received from ") else amount
+                signed_amount = -amount if any(word in description.casefold() for word in credit_keywords) or transaction_match.group(1).startswith("Received") else amount
                 transactions.append(Transaction(current_date, description, signed_amount, classify(description, categories)))
                 index = lookahead + 1
                 continue
@@ -151,6 +153,25 @@ def load_config(path: Path) -> tuple[dict[str, list[str]], list[str]]:
     return config.get("categories", {}), config.get("parser", {}).get("credit_keywords", [])
 
 
+def upload_page_html(error: str | None = None) -> str:
+    error_markup = f'<div class="error">{html.escape(error)}</div>' if error else ""
+    return f'''<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Google Pay Analytics</title>
+<style>
+:root {{ --ink:#17231f; --muted:#6c7973; --paper:#f5f2ea; --panel:#fffdf8; --line:#dedbd1; --green:#0f6b52; --mint:#d6eee2; }}
+* {{ box-sizing:border-box; }} body {{ margin:0; color:var(--ink); background:var(--paper); font:16px/1.5 Georgia,serif; }}
+main {{ max-width:720px; margin:0 auto; padding:12vh 24px; }} .kicker {{ color:var(--green); font:700 12px/1.2 ui-monospace,monospace; letter-spacing:.14em; text-transform:uppercase; }}
+h1 {{ max-width:600px; margin:14px 0; font-size:clamp(2.8rem,8vw,5.8rem); line-height:.95; letter-spacing:-.04em; }} .intro {{ max-width:520px; color:var(--muted); font-size:1.1rem; }}
+form {{ margin-top:34px; padding:24px; background:var(--panel); border:1px solid var(--line); border-radius:8px; }} input[type=file] {{ display:block; width:100%; padding:14px; border:1px dashed var(--green); background:#faf8f1; font:14px ui-monospace,monospace; }}
+button {{ margin-top:16px; padding:12px 18px; border:0; border-radius:5px; color:white; background:var(--green); font:700 14px ui-monospace,monospace; cursor:pointer; }} button:hover {{ background:#0a503e; }}
+.note {{ margin-top:16px; padding:14px 16px; background:var(--mint); color:var(--green); font-size:14px; }} .error {{ margin-top:20px; padding:14px 16px; color:#8d2f25; background:#f8ddd4; border:1px solid #e9b9aa; }}
+</style></head><body><main><div class="kicker">Local Google Pay analysis</div><h1>See where the money went.</h1>
+<p class="intro">Drop in a Google Pay statement PDF and get a small, readable spending report. Nothing leaves this machine.</p>
+<form method="post" enctype="multipart/form-data"><input type="file" name="statement" accept="application/pdf,.pdf" required><button type="submit">Analyze statement</button></form>
+<div class="note">Categories come from <strong>config.toml</strong>. Add merchant patterns there before analyzing.</div>{error_markup}</main></body></html>'''
+
+
 def markdown_report(pdf_path: Path, report: dict) -> str:
     total = report["total_expenses"] or 1
     stats = report["statistics"]
@@ -182,12 +203,12 @@ h1,h2,p {{ margin:0; }} h1 {{ font:700 clamp(2.1rem,5vw,4.8rem)/.95 Georgia,seri
 .card span,.subtle {{ color:var(--muted); font:12px ui-monospace,monospace; }} .grid {{ display:grid; grid-template-columns:1.1fr .9fr; gap:18px; margin-bottom:18px; }} .panel {{ padding:24px; }}
 h2 {{ font-size:1.3rem; margin-bottom:20px; }} .bars {{ display:grid; gap:13px; }} .bar-row {{ display:grid; grid-template-columns:130px 1fr 90px; gap:12px; align-items:center; }} .bar-label {{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}
 .track {{ height:11px; background:#e8e5dc; border-radius:20px; overflow:hidden; }} .fill {{ height:100%; background:var(--green); border-radius:inherit; }} .amount {{ text-align:right; font:12px ui-monospace,monospace; }}
-.donut-wrap {{ display:flex; align-items:center; gap:28px; }} .donut {{ width:190px; aspect-ratio:1; border-radius:50%; background:conic-gradient(var(--green) 0 25%,var(--orange) 25% 50%,var(--blue) 50% 75%,var(--yellow) 75% 100%); position:relative; flex:none; }} .donut:after {{ content:""; position:absolute; inset:28%; border-radius:50%; background:var(--panel); }} .legend {{ display:grid; gap:8px; width:100%; }} .legend-row {{ display:flex; justify-content:space-between; gap:12px; border-bottom:1px solid var(--line); padding-bottom:7px; }}
+.donut-wrap {{ display:flex; align-items:center; gap:28px; }} .donut {{ width:190px; aspect-ratio:1; border-radius:50%; background:conic-gradient(var(--green) 0 25%,var(--orange) 25% 50%,var(--blue) 50% 75%,var(--yellow) 75% 100%); position:relative; flex:none; cursor:crosshair; }} .donut:after {{ content:""; position:absolute; inset:28%; border-radius:50%; background:var(--panel); pointer-events:none; }} .donut-tooltip {{ display:none; position:absolute; left:50%; top:50%; z-index:1; transform:translate(-50%,-50%); width:132px; padding:9px 10px; border:1px solid var(--line); border-radius:5px; background:var(--panel); box-shadow:0 4px 14px #17231f22; text-align:center; font:12px/1.35 ui-monospace,monospace; pointer-events:none; }} .donut-tooltip strong {{ display:block; margin-bottom:3px; font:700 13px Georgia,serif; }} .donut.is-hovering .donut-tooltip {{ display:block; }} .legend {{ display:grid; gap:8px; width:100%; }} .legend-row {{ display:flex; justify-content:space-between; gap:12px; border-bottom:1px solid var(--line); padding-bottom:7px; }}
 table {{ border-collapse:collapse; width:100%; }} th,td {{ text-align:left; border-bottom:1px solid var(--line); padding:10px 6px; }} th:last-child,td:last-child {{ text-align:right; }} th {{ color:var(--muted); font:11px ui-monospace,monospace; text-transform:uppercase; letter-spacing:.08em; }} td:last-child {{ font-family:ui-monospace,monospace; }} .scroll {{ max-height:430px; overflow:auto; }}
 .toolbar {{ display:flex; justify-content:space-between; gap:12px; align-items:center; margin:-8px 0 12px; }} .switch {{ display:flex; align-items:center; gap:9px; color:var(--muted); font:12px ui-monospace,monospace; cursor:pointer; }} .switch input {{ accent-color:var(--green); width:16px; height:16px; }} .stat-list {{ display:grid; grid-template-columns:1fr 1fr; gap:12px 24px; }} .stat {{ border-bottom:1px solid var(--line); padding-bottom:9px; }} .stat b {{ display:block; font:700 1.1rem Georgia,serif; margin-top:3px; }}
 .note {{ background:var(--mint); border:0; }} .note strong {{ color:var(--green); }} .empty {{ color:var(--muted); }} @media(max-width:800px) {{ .wrap {{ padding:28px 16px 48px; }} header {{ display:block; }} .source {{ text-align:left; margin-top:16px; }} .cards,.grid {{ grid-template-columns:1fr 1fr; }} .grid {{ display:grid; }} .grid > .panel:first-child {{ grid-column:1/-1; }} .donut-wrap {{ display:block; }} .donut {{ margin:0 auto 22px; }} }} @media(max-width:520px) {{ .cards {{ grid-template-columns:1fr 1fr; }} .card {{ min-height:100px; padding:15px; }} .bar-row {{ grid-template-columns:100px 1fr 75px; gap:7px; font-size:13px; }} }}
 </style></head><body><main class="wrap"><header><div><div class="kicker">Personal spending / latest statement</div><h1>Where the money went.</h1></div><div class="source">{pdf_path.name}<br>Generated locally</div></header>
-<section class="cards" id="cards"></section><section class="grid"><article class="panel"><h2>Spend by category</h2><div class="donut-wrap"><div class="donut" id="donut"></div><div class="legend" id="legend"></div></div></article><article class="panel"><h2>Monthly spend</h2><div class="bars" id="months"></div></article></section>
+<section class="cards" id="cards"></section><section class="grid"><article class="panel"><h2>Spend by category</h2><div class="donut-wrap"><div class="donut" id="donut"><div class="donut-tooltip" id="donut-tooltip"></div></div><div class="legend" id="legend"></div></div></article><article class="panel"><h2>Monthly spend</h2><div class="bars" id="months"></div></article></section>
 <section class="grid"><article class="panel"><h2>Category totals</h2><div class="bars" id="categories"></div></article><article class="panel"><h2>Weekday rhythm</h2><div class="bars" id="weekdays"></div></article></section>
 <section class="grid"><article class="panel"><h2>Largest expenses</h2><div class="scroll"><table><thead><tr><th>Date</th><th>Merchant</th><th>Category</th><th>Amount</th></tr></thead><tbody id="largest"></tbody></table></div></article><article class="panel"><h2>Spending statistics</h2><div class="stat-list" id="stats"></div></article></section>
 <section class="grid"><article class="panel note"><div class="toolbar"><h2>Needs categorizing</h2><label class="switch"><input id="group-toggle" type="checkbox"> Group merchants</label></div><p class="subtle">Review these rows and add patterns to config.toml.</p><div class="scroll"><table><thead><tr><th>Merchant</th><th>Count</th><th>Amount</th></tr></thead><tbody id="uncategorized"></tbody></table></div></article></section></main>
@@ -198,6 +219,10 @@ document.querySelector('#cards').innerHTML = cards.map(([label,value]) => `<div 
 const colors=['#0f6b52','#df704d','#4f7cac','#d6a43c','#7b65a7','#bf5663','#4b8791','#8b7457']; const categoryEntries=Object.entries(analysis.category_totals); const total=analysis.total_expenses || 1; let cursor=0;
 document.querySelector('#donut').style.background='conic-gradient('+categoryEntries.map(([name,value],i)=>{{const start=cursor; cursor += value/total*100; return `${{colors[i%colors.length]}} ${{start}}% ${{cursor}}%`;}}).join(',')+')';
 document.querySelector('#legend').innerHTML=categoryEntries.map(([name,value],i)=>`<div class="legend-row"><span><b style="color:${{colors[i%colors.length]}}">●</b> ${{name}}</span><span>${{money(value)}}</span></div>`).join('');
+const donut = document.querySelector('#donut'); const tooltip = document.querySelector('#donut-tooltip'); let segmentStart = 0;
+const segments = categoryEntries.map(([name,value]) => {{ const segment = {{name, value, start:segmentStart, end:segmentStart + value / total * 360}}; segmentStart = segment.end; return segment; }});
+donut.addEventListener('mousemove', event => {{ const bounds = donut.getBoundingClientRect(); const x = event.clientX - (bounds.left + bounds.width / 2); const y = event.clientY - (bounds.top + bounds.height / 2); const radius = Math.hypot(x, y); if (radius < bounds.width * .28) {{ donut.classList.remove('is-hovering'); return; }} let angle = Math.atan2(y, x) * 180 / Math.PI + 90; if (angle < 0) angle += 360; const segment = segments.find(item => angle >= item.start && angle < item.end); if (!segment) return; tooltip.innerHTML = `<strong>${{segment.name}}</strong>${{money(segment.value)}}<br>${{(segment.value / total * 100).toFixed(1)}}% of expenses`; donut.classList.add('is-hovering'); }});
+donut.addEventListener('mouseleave', () => donut.classList.remove('is-hovering'));
 function bars(target, entries) {{ const max=Math.max(...entries.map(([,value])=>value),1); document.querySelector(target).innerHTML=entries.map(([name,value])=>`<div class="bar-row"><span class="bar-label">${{name}}</span><div class="track"><div class="fill" style="width:${{value/max*100}}%"></div></div><span class="amount">${{money(value)}}</span></div>`).join(''); }}
 bars('#categories',categoryEntries); bars('#months',Object.entries(analysis.monthly_totals)); bars('#weekdays',Object.entries(analysis.weekday_totals));
 const stats = analysis.statistics; const statEntries = [['Median expense',money(stats.median_expense)],['90th percentile',money(stats.p90_expense)],['Typical daily spend',money(stats.daily_average)],['Active days',stats.active_days],['Largest purchase',money(stats.largest_expense)],['Top 10 share',(stats.top_ten_share * 100).toFixed(1) + '%']];
