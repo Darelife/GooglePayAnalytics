@@ -1,4 +1,6 @@
-from gpay_analytics import analyze, parse_transactions
+from pathlib import Path
+
+from gpay_analytics import analyze, dashboard_html, parse_transactions
 
 
 def test_parses_google_pay_rows_and_split_amounts():
@@ -38,3 +40,22 @@ def test_analysis_keeps_all_expenses_sorted_and_calculates_statistics():
     assert [item["amount"] for item in result["largest_expenses"]] == [300, 100, 50]
     assert result["statistics"]["median_expense"] == 100
     assert result["statistics"]["active_days"] == 3
+
+
+def test_dashboard_has_date_range_filter():
+    rows = parse_transactions(
+        "01 Aug,\n2026\nPaid to Cafe\n₹100\n02 Aug,\n2026\nPaid to Store\n₹50",
+        {"Food": ["cafe"]},
+    )
+    payload = {
+        "source": "statement.pdf",
+        "transactions": [row.__dict__ for row in rows],
+        "analysis": analyze(rows),
+    }
+
+    page = dashboard_html(Path("statement.pdf"), payload)
+
+    assert 'id="date-from"' in page
+    assert 'id="date-to"' in page
+    assert 'id="all-time"' in page
+    assert "function calculateAnalysis(transactions)" in page
